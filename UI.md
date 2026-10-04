@@ -866,3 +866,120 @@ transform 列表是 `translate3d → rotateY → scale`，起点是中心，
 | `Esc` 关闭弹层 | `overlay=0` 且视频 `paused=true` ✅ |
 | `⧉` / `Ctrl+点击` 进弹层 | 地址与标题正确，主视图不被带走 ✅ |
 | 窄屏性能（焦点优先） | bilibili complete 7.7s → 3.8s ✅ |
+
+---
+
+## 18. 第五轮：站点图标 + Logo
+
+### 18.1 控制栏最左侧的站点图标
+
+策略是「**先快后准**」：
+
+1. **面板创建时立刻挂上根 `/favicon.ico`**（平台可以用 `icon` 字段显式覆盖）—— 先有东西显示，
+   不让这一格空着等。
+2. 它**一旦加载成功就收工**，不再多花一次请求。
+3. **只有它失败时**才去找文档声明的 `<link rel="icon">`。这条路是必需的：很多站点的根
+   favicon 是 301/302 甚至空响应（实测知乎 301、抖音 302 到 `lf1-cdn-tos.bytegoofy.com`），
+   而文档里那份才是真正在用的。
+4. 都取不到就**首字徽标**兜底 —— `data:` URI 内联的圆角方块，不再发请求，因此不可能再失败。
+   这一格**永远不会空**。
+
+> 首屏的图标请求发出时，`clients.claim()` 可能还没生效（见 §18.2），
+> 那一次必然 404。所以失败过的会在「SW 已接管」后再试一次 ——
+> 否则像抖音这种"文档里没声明 icon"的站点会永久停在徽标上。
+
+两个实现细节：
+
+- 从文档读到的 `href` 通常是**真实网址**（Scramjet 并不改写属性，§16.1 已经吃过一次亏），
+  所以必须自己 `controller.encodeUrl()` 编码；否则图片请求会绕过代理直连目标站。
+- `apple-touch-icon` 放在最后兜底。它常常是 152/512px，塞进 16px 的槽位纯属浪费带宽 ——
+  实测 B 站文档里同时有 512px 的 touch icon 和 32px 的 favicon，按文档序取会拿到 512px。
+
+**验收**（`verify/favicon-check.mjs`）：
+
+| 视图 | 结果 | 来源 |
+|---|---|---|
+| 哔哩哔哩 | ✅ 32px | `i0.hdslb.com/.../favicon.ico`（文档声明） |
+| 知乎 | ✅ 32px | `static.zhihu.com/heifetz/favicon.ico`（文档声明） |
+| 抖音 | ✅ | `www.douyin.com/favicon.ico`（302 → CDN） |
+| 酷安 | ✅ 48px | `localhost:17520/favicon.ico`（直连，不经代理） |
+
+### 18.2 沿路挖出来的坑：Service Worker 从不接管首屏页面
+
+做图标时撞到一个很反直觉的现象 —— **地址对、却 404**：
+
+```
+__ZOETROPE.encode("https://www.bilibili.com/favicon.ico")
+  → /scramjet/https%3A%2F%2Fwww.bilibili.com%2Ffavicon.ico     ← 编码正确
+fetch(那个地址) → 404  text/plain                              ← 静态服务的 "not found"
+```
+
+地址没错，是**请求根本没被 SW 拦到**。根因：
+
+> 首屏那个 hub 页面创建于 SW 激活**之前**，按规范不在 SW 控制之内
+> （`navigator.serviceWorker.controller === null`）；iframe 是激活之后新建的，才会被控制。
+
+于是出现一种极隐蔽的割裂：**iframe 里发出的请求走代理 ✅，hub 页面自己发的请求绕过 SW ❌**。
+
+受害的是所有「由 hub 自己发起、却指向 `/scramjet/`」的请求。其中一个后果很讽刺：
+
+**`warmUpTransport` 的预热在首屏其实什么都没做。** 它拿到的是静态服务的 404，
+而代码写的是 `if (r.status < 500) return i + 1` —— 404 < 500，被判定成"预热成功"。
+这也解释了它为什么只要 **88 ms**。预热本意是解决"第一个 frame 有约 50% 概率撞上
+`wasm not loaded yet`"，结果首屏那次一直是空转，真正兜住的是 `goWithRetry` 的慢重试。
+
+上游 Scramjet 既没有 `clients.claim()` 也没有注册 `activate`，所以这个坑一直存在。
+在 `sw.js` 里补上 `activate → clients.claim()` 之后：
+
+- `navigator.serviceWorker.controller` 从 `null` 变成有值
+- `warm` 分段从 88ms 变成几百毫秒到 2 秒多 —— **它终于真的发了一次代理请求**
+
+#### 补 claim 会不会拖慢启动？做了 A/B（不是靠感觉）
+
+开关 `activate` 块，各测两轮（`WATCH_MS=26000`，同一台机、同一时段、串行）：
+
+| | `warm` 分段 | bilibili 首次 load | 总时长 |
+|---|---|---|---|
+| **OFF**（无 claim） | 112 / 98 ms（**空转**） | 6144 / 5660 ms | 8981 / 8642 ms |
+| **ON**（有 claim） | 620 ms / 2584 ms | 4216 / 6641 ms | 8884 / 11746 ms |
+
+结论：**没有回归**。好的一轮反而更快（4216 vs 5660）—— 因为传输层是真的热了，
+而 OFF 那两轮的 88ms "预热成功"只是 404 空转，冷启动照样由 frame 自己承担。
+站点加载时间的轮间波动本身就很大（4.2–8.4 s），单次采样说明不了任何问题。
+
+#### 顺手修掉：预热原本没有时间上限
+
+A/B 里出现过一次 `warm = 18247ms` —— 预热把启动整整卡了 18 秒。
+原因是 `warmUpTransport` 只限了次数（20 次）不限时间，每次请求也没有超时，
+一次卡死的请求就能把预算吃光。现在：
+
+- 总预算 `budgetMs = 2500`，超了就不再等，直接放 frame 走；
+- 单次 `fetch` 加 `AbortSignal.timeout(2500)`；
+- 页面还没被 SW 接管时**直接跳过重试**（那种请求拿到的是静态服务的 404，不算预热）。
+
+### 18.3 Logo
+
+设计要求：简约、大气、现代，并且要在 **16px 标签页**上还认得出来。
+
+没有靠想象，而是先出候选、渲染、**在四个尺寸下逐个看**
+（`verify/logo-candidates.mjs` → `verify/logo-candidates.png` / `logo-candidates2.png`）。
+第一轮 6 个候选（折屏强旋转 / 三段环 / 层叠面板 / 共边锯齿 / 焦点+侧板 / 鼓面）里，
+"三根柱子"那类在 16px 下全都糊成一片，唯一站得住的是**环形**；
+第二轮把环形做成 3 段 / 4 段、加不加中心点、加不加粗，最后定稿：
+
+> **四段环 = 多视图同处一页；顶部加粗高亮的一段 = 焦点；其余按三档节流递减**
+> （左右邻位、底部远端）。
+
+交付物：
+
+| 文件 | 用途 |
+|---|---|
+| `docs/images/logo.svg` | 矢量源文件，README hero 直接用 |
+| `proxy/public/favicon.svg` | hub 的站点图标（现代浏览器优先用 SVG） |
+| `proxy/public/favicon.png` | 64px 位图兜底（Safari 等不吃 SVG favicon） |
+| `proxy/public/apple-touch-icon.png` | 180px，iOS 加到主屏用 |
+| `tls/site/favicon.*` | 证书引导页同样挂上，保持一致 |
+
+`verify/logo-render.mjs` 负责从 `logo.svg` 生成两种 PNG 和一张
+「深/浅底色 × 16/32/64/96px」的预览图 —— 本机没有 imagemagick / rsvg / cwebp，
+所以还是借无头 Chromium 的 canvas 缩放 + 编码。

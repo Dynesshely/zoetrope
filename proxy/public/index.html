@@ -4,6 +4,10 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>zoetrope · 西洋镜</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="icon" href="/favicon.png" sizes="64x64" type="image/png" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<meta name="theme-color" content="#0b0e13" />
 
 		<!-- 顺序不可改：scramjet 与 baremux 必须先于 hub.js -->
 		<script src="/scram/scramjet.all.js"></script>
@@ -241,6 +245,15 @@
 				background: #10161f;
 				border-bottom: 1px solid var(--line);
 			}
+			/* 控制栏最左侧：站点 favicon（由 hub.js 从各视图文档里解析） */
+			.chrome .fav {
+				flex: 0 0 auto;
+				width: 16px;
+				height: 16px;
+				border-radius: 4px;
+				object-fit: contain;
+				background: #0b0e13;
+			}
 			.chrome .ctl {
 				flex: 0 0 auto;
 				width: 24px;
@@ -283,7 +296,7 @@
 			}
 			.pane[data-focus="0"] .chrome .ctl,
 			.pane[data-focus="0"] .chrome .addr { visibility: hidden; }
-			.pane[data-focus="0"] .chrome .name { opacity: 1; }
+			.pane[data-focus="0"] .chrome .name { opacity: 1; left: 32px; }
 
 			.pane .frame {
 				position: relative;

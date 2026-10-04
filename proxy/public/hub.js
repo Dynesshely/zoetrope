@@ -69,6 +69,8 @@ window.__ZOETROPE = {
 	},
 	/** 把代理地址还原成真实网址（会自动判断是不是代理地址） */
 	decode: toRealUrl,
+	/** 把真实网址编码成走代理的地址（favicon 那类由 hub 自己发起的请求要用） */
+	encode: (u) => outboundUrl(u, { mode: "proxied" }),
 	isProxiedUrl,
 	/** 直接往某个视图里导航，绕过地址栏模拟 */
 	go(id, url) {
@@ -795,6 +797,118 @@ function toRealUrl(u) {
 	return u;
 }
 
+/**
+ * 把一个**真实网址**变成 hub 页面上能加载的地址。
+ *   代理视图  → 必须走 /scramjet/ 编码，否则请求会直连目标站（被 CORS/风控挡掉）
+ *   直连视图  → 原样用（跨源图片本来就能显示）
+ */
+function outboundUrl(url, view) {
+	if (!url) return null;
+	if (view && view.mode === "proxied" && controller && typeof controller.encodeUrl === "function") {
+		try {
+			return controller.encodeUrl(url);
+		} catch {}
+	}
+	return url;
+}
+
+/**
+ * 站点图标彻底取不到时的兜底：平台名首字的圆角徽标。
+ * 用 data: URI 内联，不会再发一次请求，也就不可能再失败。
+ */
+function monogramIcon(name, color) {
+	const ch = String(name || "?").trim().slice(0, 1) || "?";
+	const svg =
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
+		`<rect width="32" height="32" rx="9" fill="${color}"/>` +
+		`<text x="16" y="22" text-anchor="middle" font-family="-apple-system,Segoe UI,PingFang SC,sans-serif" font-size="17" font-weight="600" fill="#0b0e13">${ch}</text>` +
+		`</svg>`;
+	return "data:image/svg+xml," + encodeURIComponent(svg);
+}
+
+/**
+ * 从**代理视图自己的文档**里读它声明的图标。
+ *
+ * 这是比 "/favicon.ico" 更靠谱的来源：很多站点的根 favicon 是 301/302
+ * （知乎、抖音都是），而文档里的 `<link rel="icon">` 指向真正那份，
+ * 可能是 SVG、也可能是 apple-touch-icon。
+ *
+ * 注意 href 拿到的通常是**真实网址**（Scramjet 不改写属性），所以要自己 encode。
+ */
+function faviconFromDoc(view) {
+	try {
+		const d = view.el.contentDocument;
+		if (!d) return null;
+		// 优先真正的 favicon（通常 16–32px）。apple-touch-icon 常是 152/512px，
+		// 塞进 16px 的槽位纯属浪费带宽，所以放到最后兜底。
+		const link =
+			d.querySelector('link[rel~="icon" i]') ||
+			d.querySelector('link[rel="apple-touch-icon" i]');
+		if (!link) return null;
+		const raw = link.getAttribute("href");
+		if (!raw) return null;
+		if (/^data:/i.test(raw)) return raw;
+		// 相对路径要相对**真实网址**解析，不能相对被改写的 hub 地址
+		const base = realUrlOfEl(view.el) || view.hist[view.hidx];
+		if (!base) return null;
+		const abs = new URL(raw, base).href;
+		if (!/^https?:/i.test(abs)) return null;
+		return outboundUrl(abs, view);
+	} catch {
+		return null;
+	}
+}
+
+/** 给视图设置图标；同一地址不重复赋值，避免打断已解码的图 */
+function setFavicon(view, url) {
+	const fav = view.fav;
+	if (!fav || !url) return;
+	if (fav.getAttribute("src") === url) return;
+	fav.removeAttribute("data-fb");
+	fav.src = url;
+}
+
+/**
+ * 站点图标的状态机（由 900ms 轮询驱动）。
+ *
+ * 实际顺序是「**先快后准**」：
+ *   1. 面板创建时立刻挂上根 `/favicon.ico`（或平台显式声明的 icon）—— 先有东西显示；
+ *   2. 它一旦加载成功就收工（`data-ok`），不再多花一次请求；
+ *   3. **只有它失败时**才去找文档声明的 <link rel="icon">，
+ *      因为很多站的根 favicon 是 301/302 甚至是空响应（知乎、抖音都是）；
+ *   4. 都取不到就退回首字徽标（由 <img> 的 error 处理器兜底，保证这一格永远不空）。
+ *
+ * ⚠️ 为什么需要"再试一次"这一步：
+ * 首屏的图标请求是**在面板创建时立即发出**的，那一刻 `clients.claim()`
+ * 可能还没生效 —— 此时 hub 页面尚不受 SW 控制，请求会绕过代理直连静态服务拿到 404。
+ * 文档里有 icon 的站点（B 站/知乎）会在下一步升级时自然恢复；
+ * 文档里没声明的站点（抖音）则会永久停在徽标上。所以失败过就要等接管后再来一次。
+ */
+function refreshFavicon(v) {
+	const fav = v.fav;
+	if (!fav) return;
+	if (fav.dataset.ok === "1") return; // 已经拿到真图，不再折腾
+
+	if (v.mode === "proxied" && !fav.dataset.docTried) {
+		const ic = faviconFromDoc(v);
+		if (ic) {
+			fav.dataset.docTried = "1";
+			setFavicon(v, ic);
+			return;
+		}
+	}
+	if (v.seedIcon && !fav.dataset.seedTried) {
+		fav.dataset.seedTried = "1";
+		setFavicon(v, v.seedIcon);
+		return;
+	}
+	// 停在徽标上 = 之前那次失败了。等 SW 接管页面后再试一次根 favicon。
+	if (v.seedIcon && fav.dataset.fb === "1" && navigator.serviceWorker.controller && !fav.dataset.seedRetried) {
+		fav.dataset.seedRetried = "1";
+		setFavicon(v, v.seedIcon);
+	}
+}
+
 function anchorTarget(a, view) {
 	const decoded = toRealUrl(a.href || "");
 	if (decoded && decoded !== a.href) return decoded;
@@ -1150,6 +1264,7 @@ function startViewPolling() {
 				v.hidx = v.hist.length - 1;
 			}
 			renderChrome(v);
+			refreshFavicon(v);
 			// C 档停渲染，但站点可能**稍后**才开始自动播放 —— 每次轮询兜一次
 			if (v.pane.dataset.tier === "C") pauseMediaIn(v.el);
 		}
@@ -1184,10 +1299,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *
  * 这里先反复打一个极小的请求（默认取第一个平台的 /favicon.ico）直到成功，再创建各平台 frame。
  */
-async function warmUpTransport(scramjet, url, tries = 20) {
+async function warmUpTransport(scramjet, url, tries = 20, budgetMs = 2500) {
+	const t0 = performance.now();
+	const left = () => budgetMs - (performance.now() - t0);
 	for (let i = 0; i < tries; i++) {
+		// ⚠️ 页面还没被 SW 接管时，这个请求会**绕过代理**直连静态服务拿到 404。
+		// 404 < 500，会被下面的判定当成"预热成功" —— 于是首屏那次预热其实是空转。
+		// （`sw.js` 补了 clients.claim() 之后这个窗口很短，但仍然要挡住。）
+		if (!navigator.serviceWorker.controller) {
+			if (left() <= 0) return 0;
+			await sleep(200);
+			continue;
+		}
 		try {
-			const r = await fetch(scramjet.encodeUrl(url), { cache: "no-store" });
+			const r = await fetch(scramjet.encodeUrl(url), {
+				cache: "no-store",
+				// 单次请求也要有上限，否则一次卡死就把预算全吃掉
+				signal: AbortSignal.timeout(2500),
+			});
 			if (r.status < 500) {
 				await r.arrayBuffer().catch(() => {});
 				return i + 1;
@@ -1195,7 +1324,8 @@ async function warmUpTransport(scramjet, url, tries = 20) {
 		} catch {
 			/* 传输层还没热，继续重试 */
 		}
-		await sleep(400);
+		if (left() <= 0) return 0;
+		await sleep(300);
 	}
 	return 0;
 }
@@ -1571,6 +1701,42 @@ async function main() {
 			`<input class="addr" spellcheck="false" placeholder="输入网址后回车" />` +
 			`<span class="name">${p.name}</span>`;
 		clip.appendChild(chrome);
+
+		// ── 控制栏最左侧的站点图标 ──────────────────────────────
+		// 初值用平台自己声明的 icon，或从目标站根推 /favicon.ico；
+		// 等文档就绪后再升级成它 <link rel="icon"> 里真正声明的那份。
+		// 两者都失败（或跨源取不到）就退回首字徽标，保证这一格永远不空。
+		const fav = document.createElement("img");
+		fav.className = "fav";
+		fav.alt = "";
+		fav.decoding = "async";
+		fav.referrerPolicy = "no-referrer";
+		fav.addEventListener("load", () => {
+			fav.dataset.ok = "1";
+		});
+		fav.addEventListener("error", () => {
+			fav.removeAttribute("data-ok");
+			if (fav.src.startsWith("data:")) return; // 已经在用徽标了，别再递归
+			fav.dataset.fb = "1";
+			fav.src = monogramIcon(p.name, p.accent || "#58a6ff");
+		});
+		chrome.prepend(fav);
+		view.fav = fav;
+
+		let seedIcon = p.icon || null;
+		if (!seedIcon) {
+			try {
+				seedIcon = new URL("/favicon.ico", targetUrl).href;
+			} catch {}
+		}
+		view.seedIcon = outboundUrl(seedIcon, view);
+		if (view.seedIcon) {
+			fav.dataset.seedTried = "1";
+			setFavicon(view, view.seedIcon);
+		} else {
+			fav.dataset.fb = "1";
+			fav.src = monogramIcon(p.name, p.accent || "#58a6ff");
+		}
 
 		const frameBox = document.createElement("div");
 		frameBox.className = "frame";

@@ -6,6 +6,12 @@
  *
  * 这是**默认值**。用户在页面里通过「设置」改过之后，会以 localStorage 的
  * `zoetrope.sites` 为准（见文件末尾）。
+ *
+ * icon（可选）：控制栏最左侧那个站点图标的**真实网址**。
+ *   不写的话会退回「目标站根 + /favicon.ico」，再退回平台名首字的徽标。
+ *   文档就绪后，hub.js 还会尝试升级成页面 `<link rel="icon">` 里声明的那份 ——
+ *   所以只有"根 favicon 不可用、文档声明又取不到"时才需要显式写。
+ *   知乎就属于这种：https://www.zhihu.com/favicon.ico 是 301，不是图片。
  */
 const ZOETROPE_DEFAULT_SITES = [
 	{
@@ -19,6 +25,7 @@ const ZOETROPE_DEFAULT_SITES = [
 		id: "zhihu",
 		name: "知乎",
 		url: "https://www.zhihu.com/",
+		icon: "https://static.zhihu.com/heifetz/favicon.ico",
 		accent: "#0084ff",
 		proxied: true,
 	},

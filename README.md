@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/images/logo.svg" alt="zoetrope" width="92" height="92">
+
 # zoetrope · 西洋镜
 
 **一个浏览器窗口，并排看多个社媒平台。**
@@ -70,7 +72,7 @@ zoetrope 把它们放进**一个页面**：每个平台一个独立视图，按 
 | 🎯 **焦点三档节流** | 焦点完整渲染 · 邻位侧立压暗 · 远端 `content-visibility` 停渲染并暂停媒体 |
 | 🪟 **页内子视图** | 拦截 `target=_blank` / `window.open` / ⌥·Ctrl·⌘·中键点击 → 页内弹层，不再弹出真标签页；弹层内链接原地换页 |
 | 🔐 **登录态持久** | Cookie 罐落到 IndexedDB，Service Worker 冷启动会**先回填再处理请求**（否则每次回收都掉登录） |
-| ⌨️ **每视图自带控制栏** | 后退 / 前进 / 刷新 / 地址栏 / ⧉ 弹层；`Ctrl+R` 刷新焦点视图而不是整页 |
+| ⌨️ **每视图自带控制栏** | 最左侧是站点自己的 favicon（根 favicon 先显示，失败再退回文档声明的那份，最后用首字徽标兜底）；后退 / 前进 / 刷新 / 地址栏 / ⧉ 弹层；`Ctrl+R` 刷新焦点视图而不是整页 |
 | ⚙️ **站点可配置** | 顶栏 ⚙ 或 `Ctrl+,` 编辑站点列表与地址，支持 `{host}` 占位符保证同站 |
 | 📱 **任何设备** | 纯网页，手机 / 平板 / 电视浏览器都能开，服务端跑在局域网的一台机器上 |
 
@@ -240,13 +242,18 @@ proxy/
   public/hub.js         视图调度、折屏布局、弹层、设置；window.__ZOETROPE 供自动化读取状态
   public/platforms.js   平台清单 ← 改这里增删平台
   public/sw.js          Scramjet Service Worker（含 cookie 罐冷启动回填）
+  public/favicon.svg    Logo（同时是 hub 的站点图标）
+  public/favicon.png    Logo 64px 兜底（Safari 等不吃 SVG favicon 的浏览器）
+  public/apple-touch-icon.png  Logo 180px
 tls/
   gen-certs.sh          生成自签根 CA + 服务器证书（SAN 含 LAN IP）
   Caddyfile             443 TLS 终结 → 127.0.0.1:18095；18096 提供 CA 下载
   certs/                ca.crt / ca.key / server.crt / server.key（不入库）
   site/                 证书安装引导页
-docs/images/            README 用图（WebP，由 verify/doc-images.mjs 生成）
+docs/images/            README 用图与 logo.svg
 verify/*.mjs            无头 CDP 验证脚本：截图 + 断言，产物不入库
+  logo-render.mjs       由 logo.svg 生成 favicon PNG + 浅/深底预览图
+  logo-candidates.mjs   Logo 候选对比图（16px 才是真正的考场）
 vendor/Scramjet-App/    上游参考实现（只读，git 子模块）
 LICENSE                 AGPL-3.0（GitHub 许可证模板原版）
 DESIGN.md               → 方案论证、被否掉的路线、逐轮实测结论
@@ -271,6 +278,7 @@ UI.md                   → UI 设计、性能纪律、逐轮需求与踩坑记�
 | 10 | **`decodeUrl()` 对非代理地址会无条件切片** | 「在弹层里打开视频」弹出空白子视图；而且**只有长的 URL 中招**，短的反而正常，看起来像随机 | 调用前先判断地址确实以 `origin + "/scramjet/"` 开头，且只接受 `http(s)://` 形式的解码结果 |
 | 11 | **面板的 z-index 比弹层高** | 弹层看起来"半透明"（其实是面板 `opacity: 0.72` 盖在上面），遮罩也从来没压暗过任何面板 | 层级写成契约：面板 `10-\|d\|`（焦点 20）< `#veil` 30 < `#overlay` 31 |
 | 12 | **四个同源 iframe 挤在同一个渲染进程里同时开** | 各平台首屏明显慢于原生标签页 | 按「到焦点的环绕距离」分三批放行导航；远端面板 `content-visibility: hidden` 停渲染。bilibili 首屏 complete 7.7s → 3.8s |
+| 13 | **Service Worker 从不接管首屏页面** | iframe 走代理正常，但 **hub 页面自己发起的** `/scramjet/…` 请求绕过 SW 直连静态服务拿到 404（表现为站点图标不显示；更隐蔽的是**首次预热其实空转**） | 上游 Scramjet 没有 `clients.claim()` 也没有 `activate` 监听，在 `sw.js` 里补上。详见 `UI.md` §18.2 |
 
 10–12 的完整定位过程（含像素级判定与计时数据）见 [UI.md](UI.md) §16–§17。
 

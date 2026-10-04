@@ -93,6 +93,28 @@ const jarReady = (async () => {
 
 jarReady.then((n) => console.log(`[zoetrope/sw] 已重放 ${n} 条持久化 cookie`));
 
+/**
+ * 激活后立刻接管**所有**客户端，包括**当前这个页面**。
+ *
+ * 这一步不是可选的。首屏那个 hub 页面是在 SW 激活**之前**创建的，按规范不在
+ * SW 的控制之内（`navigator.serviceWorker.controller === null`）；而 iframe 是
+ * 激活之后新建的，会被控制。于是出现一种很隐蔽的割裂：
+ *
+ *     iframe 里发出的请求   → 走代理 ✅
+ *     hub 页面自己发的请求   → 绕过 SW、直连静态服务 ❌（拿到 404）
+ *
+ * 受害的是所有"由 hub 自己发起、却指向 /scramjet/ 的请求"：
+ *   · `warmUpTransport` 的预热请求 —— 它拿到 404 就当"预热成功"直接返回，
+ *     于是**首屏那次预热其实什么都没做**（这也解释了它为什么只要 88ms）
+ *   · 控制栏的站点图标（`<img src="/scramjet/https%3A%2F%2F…favicon.ico">`）
+ *
+ * 上游 Scramjet 从没写过 `clients.claim()`，也没有 `activate` 监听，
+ * 所以这个坑一直存在。这里补上。
+ */
+self.addEventListener("activate", (event) => {
+	event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener("fetch", (event) => {
 	event.respondWith(
 		(async () => {
