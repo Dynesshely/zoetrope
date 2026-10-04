@@ -8,7 +8,7 @@
 ![状态](https://img.shields.io/badge/status-v0.1%20alpha-orange)
 ![部署](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
 ![客户端](https://img.shields.io/badge/client-zero--install-brightgreen)
-![许可证](https://img.shields.io/badge/license-undeclared-lightgrey)
+![许可证](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 <img src="docs/images/fold-full.webp" alt="折屏 · 全幅焦点" width="900">
 
@@ -248,6 +248,7 @@ tls/
 docs/images/            README 用图（WebP，由 verify/doc-images.mjs 生成）
 verify/*.mjs            无头 CDP 验证脚本：截图 + 断言，产物不入库
 vendor/Scramjet-App/    上游参考实现（只读，git 子模块）
+LICENSE                 AGPL-3.0（GitHub 许可证模板原版）
 DESIGN.md               → 方案论证、被否掉的路线、逐轮实测结论
 UI.md                   → UI 设计、性能纪律、逐轮需求与踩坑记录
 ```
@@ -330,7 +331,13 @@ HTTP 头顺序，和真 Chrome 不同，风控据此判定为自动化 / 代理�
 
 ## 许可证
 
-本仓库**尚未声明许可证**，公开部署或分发前请先补上。依赖侧的约束：
+[GNU Affero General Public License v3.0](LICENSE) · `Copyright (C) 2026 Dynesshely`
+
+License 文件取自 GitHub 的许可证模板库（`api.github.com/licenses/agpl-3.0`），未作改动。
+
+选 AGPLv3 不是随手挑的：核心依赖**全部**是 AGPL-3.0，而且 hub 会把 Scramjet 的客户端产物
+（`/scram/`）下发给浏览器 —— 这正是 AGPL 第 13 条针对的"通过网络提供服务"场景。
+与上游保持同一许可，最省事也最不容易踩线：
 
 | 组件 | 许可证 |
 |---|---|
@@ -338,8 +345,7 @@ HTTP 头顺序，和真 Chrome 不同，风控据此判定为自动化 / 代理�
 | [Scramjet-App](https://github.com/MercuryWorkshop/Scramjet-App) | AGPL-3.0 |
 | [bare-mux](https://github.com/MercuryWorkshop/bare-mux) · [libcurl.js](https://github.com/MercuryWorkshop/libcurl.js) · [wisp-js](https://github.com/MercuryWorkshop/wisp-js) | AGPL-3.0 |
 
-hub 会把 Scramjet 的客户端产物（`/scram/`）下发给浏览器，属于 AGPL 意义上的
-"通过网络提供服务"，请自行确认相应义务。
+> 如果你把它部署成对外提供的网络服务，AGPL 第 13 条要求你向使用者提供对应的完整源码。
 
 ---
 
