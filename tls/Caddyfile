@@ -1,0 +1,42 @@
+{
+	admin off
+	# 用自己签的证书，不走 ACME 自动签发
+	auto_https off
+}
+
+# ── HTTPS 主入口 ────────────────────────────────────────────────────────────
+# Service Worker 需要安全上下文，局域网 IP 上的 http:// 不算，所以 LAN 访问必须走这里。
+# 后端 18095 是明文 HTTP，只监听回环/本机，不要直接暴露给客户端。
+https://10.0.30.61 {
+	tls /certs/server.crt /certs/server.key
+
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:18095 {
+		# WebSocket 升级（/wisp/ 走这里）由 reverse_proxy 自动处理
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+	}
+
+	log {
+		output file /data/access.log
+		format console
+	}
+}
+
+# ── 自建酷安 Web 版 ─────────────────────────────────────────────────────────
+# 它是同一台机器上的 Vite dev server，明文 HTTP 在 127.0.0.1:17520。
+# 当 hub 走 HTTPS 时，嵌入 http:// 的 iframe 会被浏览器的**混合内容**策略直接拦掉，
+# 所以在同一个 IP 的另一个端口上给它加一层 TLS。
+# 走 SSH 隧道（http://127.0.0.1:18095/）时用不到这个，platforms.js 会按协议自动切换。
+https://10.0.30.61:17521 {
+	tls /certs/server.crt /certs/server.key
+	reverse_proxy 127.0.0.1:17520
+}
+
+# ── HTTP 引导端口 ───────────────────────────────────────────────────────────
+# 还没安装根 CA 的设备从这里下载 ca.crt —— 明文 HTTP，不会弹证书警告。
+http://10.0.30.61:18096 {
+	root * /site
+	file_server
+}

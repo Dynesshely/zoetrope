@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>zoetrope — 安装本地根证书</title>
+		<style>
+			:root { --bg:#0e1116; --bg2:#161b23; --fg:#e6edf3; --dim:#8b949e;
+				--line:#262c36; --accent:#58a6ff; --warn:#d29922; }
+			* { box-sizing: border-box; }
+			body { margin:0; background:var(--bg); color:var(--fg);
+				font:14px/1.65 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+			.wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 80px; }
+			h1 { font-size: 22px; margin: 0 0 6px; }
+			h2 { font-size: 15px; margin: 28px 0 8px; color: var(--accent); }
+			p, li { color: #c9d1d9; }
+			code { background: var(--bg2); border:1px solid var(--line); border-radius:4px;
+				padding: 1px 6px; font-size: 12.5px; }
+			.dl { display:inline-block; margin: 18px 0 6px; padding: 11px 20px;
+				background: var(--accent); color:#04121f; font-weight:600;
+				border-radius: 8px; text-decoration:none; }
+			.note { border-left: 3px solid var(--warn); background: #1d1a10;
+				padding: 10px 14px; border-radius: 0 6px 6px 0; color:#e8d9b0; }
+			ol { padding-left: 20px; }
+			hr { border:0; border-top:1px solid var(--line); margin: 32px 0; }
+			.dim { color: var(--dim); font-size: 12.5px; }
+		</style>
+	</head>
+	<body>
+		<div class="wrap">
+			<h1>安装 zoetrope 本地根证书</h1>
+			<p>
+				这个页面走的是明文 HTTP，所以不会有证书警告——它的唯一用途就是让你先把根证书装上，
+				之后 <code>https://10.0.30.61/</code> 才不会报警告，Service Worker 也才能注册。
+			</p>
+
+			<a class="dl" href="/ca.crt" download>下载 ca.crt</a>
+			<p class="dim">只需要装这一次，装完这台设备以后都不用再管。</p>
+
+			<div class="note">
+				<strong>为什么必须装：</strong>Service Worker 只在安全上下文可用。
+				局域网 IP 上的 <code>http://</code> 不满足；而 <code>https://</code>
+				若证书不被信任，浏览器会拦在警告页，Service Worker 同样注册不了。
+			</div>
+
+			<hr />
+
+			<h2>Windows</h2>
+			<ol>
+				<li>下载 <code>ca.crt</code></li>
+				<li>双击 → <strong>安装证书</strong> → 存储位置选<strong>本地计算机</strong></li>
+				<li>下一步 → <strong>将所有的证书都放入下列存储</strong> →
+					<strong>受信任的根证书颁发机构</strong> → 完成</li>
+				<li><strong>完全关闭并重开浏览器</strong></li>
+			</ol>
+
+			<h2>macOS</h2>
+			<ol>
+				<li>下载 <code>ca.crt</code>，双击导入<strong>钥匙串访问</strong>（选「系统」）</li>
+				<li>在钥匙串里找到 <code>zoetrope Local CA</code>，双击</li>
+				<li>展开<strong>信任</strong>，把「使用此证书时」设为<strong>始终信任</strong></li>
+				<li>关闭窗口并输入密码确认，然后重启浏览器</li>
+			</ol>
+
+			<h2>Linux (Chrome / Chromium)</h2>
+			<pre><code>sudo cp ca.crt /usr/local/share/ca-certificates/zoetrope-local-ca.crt
+sudo update-ca-certificates</code></pre>
+			<p class="dim">Chrome 有自己的 NSS 库时，还需要：<code>certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n zoetrope -i ca.crt</code></p>
+
+			<h2>Firefox（独立信任库）</h2>
+			<p>设置 → 隐私与安全 → 证书 → 查看证书 → 证书颁发机构 → 导入 → 勾选「信任由此 CA 标识的网站」。</p>
+
+			<h2>Android</h2>
+			<p>设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书 → 选择 <code>ca.crt</code>。
+			注意：Android 上用户安装的 CA 对 Chrome 生效，但部分 App 不认。</p>
+
+			<h2>iOS / iPadOS</h2>
+			<ol>
+				<li>Safari 打开本页下载，或在「设置 → 已下载描述文件」中安装</li>
+				<li>设置 → 通用 → 关于本机 → 证书信任设置 → 打开该 CA 的开关（<strong>这一步常被漏掉</strong>）</li>
+			</ol>
+
+			<hr />
+			<p class="dim">
+				装好后访问 <a href="https://10.0.30.61/" style="color:var(--accent)">https://10.0.30.61/</a>。
+				证书由 <code>tls/gen-certs.sh</code> 生成，叶子证书 397 天有效，到期重跑该脚本即可。
+			</p>
+		</div>
+	</body>
+</html>

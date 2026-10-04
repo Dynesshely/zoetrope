@@ -1,0 +1,3 @@
+[submodule "vendor/Scramjet-App"]
+	path = vendor/Scramjet-App
+	url = https://github.com/MercuryWorkshop/Scramjet-App

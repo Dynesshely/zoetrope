@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>zoetrope · 西洋镜</title>
+
+		<!-- 顺序不可改：scramjet 与 baremux 必须先于 hub.js -->
+		<script src="/scram/scramjet.all.js"></script>
+		<script src="/baremux/index.js"></script>
+		<script src="/platforms.js"></script>
+		<script src="/register-sw.js"></script>
+		<script src="/hub.js" defer></script>
+
+		<style>
+			:root {
+				--bg: #0b0e13;
+				--bg2: #141a22;
+				--fg: #e6edf3;
+				--dim: #8b949e;
+				--line: #242c37;
+				--accent: #58a6ff;
+
+				/* ── 折屏参数（预设会覆盖）─────────────────────────
+				   sx  每级横向位移 %（面板自身宽度）
+				   sy  每级下沉 px
+				   sz  每级后退 px
+				   ry  每级绕 Y 旋转 deg
+				   ss  每级缩放衰减
+				   dim 每级压暗量      minOp 不透明度下限 */
+				--panel-w: 62%;
+				--panel-h: 82%;
+				--sx: 76;
+				--sy: 5;
+				--sz: 190;
+				--ry: 27;
+				--ss: 0.09;
+				--dim: 0.62;
+				--minOp: 0.2;
+				--dur: 460ms;
+				--ease: cubic-bezier(0.2, 0.85, 0.28, 1);
+			}
+
+			* { box-sizing: border-box; }
+			html, body { height: 100%; margin: 0; }
+			body {
+				background: var(--bg);
+				color: var(--fg);
+				font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC",
+					"Microsoft YaHei", sans-serif;
+				display: flex;
+				flex-direction: column;
+				overflow: hidden;
+			}
+
+			/* ─────────────────────────── 顶栏 ─────────────────────────── */
+			#bar {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				padding: 8px 10px;
+				background: var(--bg2);
+				border-bottom: 1px solid var(--line);
+				flex: 0 0 auto;
+				z-index: 20;
+			}
+			#tabs { display: flex; gap: 6px; flex: 1 1 auto; overflow-x: auto; }
+			.tab {
+				display: flex;
+				align-items: center;
+				gap: 7px;
+				padding: 6px 12px;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: transparent;
+				color: var(--dim);
+				cursor: pointer;
+				white-space: nowrap;
+				font: inherit;
+			}
+			.tab:hover { color: var(--fg); border-color: #3a424e; }
+			.tab[data-active="1"] { color: var(--fg); border-color: var(--accent); background: #1b2432; }
+			.dot { width: 7px; height: 7px; border-radius: 50%; background: #444; }
+			.dot[data-s="loading"] { background: #d29922; }
+			.dot[data-s="loaded"] { background: #3fb950; }
+			.dot[data-s="error"] { background: #f85149; }
+
+			#actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+			#actions button, #actions select {
+				padding: 5px 10px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: transparent;
+				color: var(--dim);
+				cursor: pointer;
+				font: inherit;
+			}
+			#actions button[data-active="1"] { color: var(--fg); border-color: var(--accent); }
+			#actions select { background: var(--bg2); }
+			#stat { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+			/* ─────────────────────────── 舞台 ───────────────────────────
+			   perspective 放在舞台上，pane 是它的直接子元素，
+			   perspective-origin 略高于中心（像俯看展台）。
+			   面板全部恒定尺寸 + 绝对定位 → 聚焦只改 transform，零回流。 */
+			#stage {
+				flex: 1 1 auto;
+				position: relative;
+				overflow: hidden;
+				perspective: 1700px;
+				/* U6 摄像机微动：--camx/--camy 由 pointermove 写，范围 ±1.2% / ±0.8% */
+				--camx: 0%;
+				--camy: 0%;
+				perspective-origin: calc(50% + var(--camx)) calc(46% + var(--camy));
+				background:
+					radial-gradient(120% 90% at 50% 0%, #10161f 0%, #0b0e13 62%),
+					var(--bg);
+			}
+
+			/* ── 层级契约（照这里改，别再让面板骑到弹层头上）────────────
+			   面板 10-|d|（焦点 20） < #veil 30 < #overlay 31 < #labels 35
+			                                        < #boot 50 < 设置弹窗 60
+			   ⚠️ 曾经面板是 100/99/98…，而 #veil 只有 40、#overlay 只有 41 ——
+			   弹层其实被压在面板**下面**。只因为被压层级的面板自身 opacity: 0.72，
+			   透出 28% 的弹层内容，于是看起来"弹层是半透明的"。 */
+
+			.pane {
+				position: absolute;
+				/* 居中必须靠 left/top，不能用 transform ——
+				   焦点态要求 transform 严格为 none（不创建常驻合成层、文字不重采样）。
+				   注意 left 的百分比按**宽度**解析、top 按**高度**解析，
+				   而 margin 的百分比两种方向都按宽度解析，所以这里不能用 margin。
+				   --panel-w / --panel-h 可被**单个面板**覆盖（拖拽改尺寸时写内联值）。 */
+				left: calc(50% - var(--panel-w) / 2);
+				top: calc(50% - var(--panel-h) / 2);
+				width: var(--panel-w);
+				height: var(--panel-h);
+				display: flex;
+				flex-direction: column;
+				transform-origin: 50% 50%;
+				backface-visibility: hidden;
+				/* 注意：**不裁剪**。裁剪与描边交给内层 .clip，
+				   这样右下角的尺寸手柄才能露到面板外面去。 */
+				overflow: visible;
+				/* 过渡只碰 transform 与 opacity —— 两者都在合成器上跑 */
+				transition: transform var(--dur) var(--ease),
+					opacity var(--dur) var(--ease);
+			}
+
+			/* 真正的"视图"本体：负责裁剪、圆角与主题色包边 */
+			.pane .clip {
+				position: absolute;
+				inset: 0;
+				display: flex;
+				flex-direction: column;
+				border: 2px solid var(--accent);
+				border-radius: 12px;
+				overflow: hidden;
+				background: #0d1219;
+				box-shadow: 0 26px 52px -30px rgba(0, 0, 0, 0.8);
+			}
+
+			/* ── U6 接触阴影：面板"落"在展台上的接地感 ──────────────────
+			   纯径向渐变，不用 filter: blur()（模糊是每帧回读，见性能纪律）。
+			   DOM 上排在 .clip **之前**，靠文档序压在面板下方，不用负 z-index
+			   （焦点态 .pane 不是层叠上下文，负 z-index 会掉到 #stage 背景后面）。 */
+			.pane .shadow {
+				position: absolute;
+				left: 7%;
+				right: 7%;
+				bottom: -4.2%;
+				height: 16%;
+				pointer-events: none;
+				background: radial-gradient(
+					ellipse 50% 50% at 50% 50%,
+					rgba(0, 0, 0, 0.66) 0%,
+					rgba(0, 0, 0, 0.34) 42%,
+					rgba(0, 0, 0, 0) 72%
+				);
+				opacity: 0;
+				transition: opacity var(--dur) var(--ease);
+			}
+			.pane[data-focus="1"] .shadow { opacity: 1; }
+			#stage[data-mode="grid"] .pane .shadow { display: none; }
+
+			/* ── U5 三档节流 ─────────────────────────────────────────────
+			   A 焦点 / B 邻位 / C 远端。C 档已退到视觉之外，直接停渲染：
+			   content-visibility: hidden 会跳过子树绘制与布局，但保留 iframe 的状态，
+			  切回来时不用重新加载。媒体元素由 JS 侧暂停。 */
+			.pane[data-tier="C"] .frame { content-visibility: hidden; }
+
+			/* ── U6 屏幕空间标签 ────────────────────────────────────────
+			   面板本身被 rotateY + scale 变换过，里面任何文字都会被重新采样变糊。
+			   所以标签放在 #labels（不参与 3D 变换）里，按**投影后**的屏幕坐标定位。 */
+			#labels {
+				position: absolute;
+				inset: 0;
+				z-index: 35;
+				pointer-events: none;
+			}
+			.slabel {
+				position: absolute;
+				left: 0;
+				top: 0;
+				padding: 3px 11px;
+				border: 1px solid var(--line);
+				border-radius: 999px;
+				background: rgba(16, 22, 31, 0.92);
+				color: var(--fg);
+				font-size: 12px;
+				line-height: 1.6;
+				white-space: nowrap;
+				transform: translate(-50%, -50%);
+				opacity: 0;
+				transition: opacity 220ms var(--ease);
+			}
+			.slabel[data-on="1"] { opacity: 1; }
+
+			/* 弹层打开时，屏幕空间标签退场（否则会浮在弹层上面） */
+			#stage[data-overlay="1"] #labels { opacity: 0; }
+			#labels { transition: opacity 200ms var(--ease); }
+
+			/* 折屏模式下非焦点面板的名字交给屏幕空间标签：
+			   面板**内部**的那份会被 rotateY/scale 重新采样，字是糊的。 */
+			#stage[data-mode="focus"] .pane .chrome .name { opacity: 0; }
+
+			/* ── 每个视图自带一条浏览器控制栏 ──────────────────────────
+			   高度恒定、所有面板都保留这块空间 —— 否则焦点切换会改变 iframe 高度，
+			   触发整站重排。非焦点面板只是把控件藏起来、显示平台名。 */
+			/* 控制栏样式在「主视图」与「弹层」之间共用 ——
+			   两者都是 .chrome，所以这里**不能**限定在 .pane 下，
+			   否则弹层的按钮/地址栏会退化成浏览器默认外观。 */
+			.chrome {
+				position: relative;
+				flex: 0 0 auto;
+				height: 36px;
+				display: flex;
+				align-items: center;
+				gap: 6px;
+				padding: 0 8px;
+				background: #10161f;
+				border-bottom: 1px solid var(--line);
+			}
+			.chrome .ctl {
+				flex: 0 0 auto;
+				width: 24px;
+				height: 24px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				border: 1px solid transparent;
+				border-radius: 6px;
+				background: transparent;
+				color: var(--dim);
+				cursor: pointer;
+				font: 13px/1 inherit;
+				padding: 0;
+			}
+			.chrome .ctl:hover:not(:disabled) { color: var(--fg); background: #1b2432; }
+			.chrome .ctl:disabled { opacity: 0.3; cursor: default; }
+			.chrome .addr {
+				flex: 1 1 auto;
+				min-width: 0;
+				height: 24px;
+				padding: 0 10px;
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				background: #0b0e13;
+				color: var(--fg);
+				font: 12px/1 inherit;
+			}
+			.chrome .addr:focus { outline: none; border-color: var(--accent); }
+			/* 非焦点：藏控件、显名字（两种状态都占同样的高度，布局不变） */
+			.pane .chrome .name {
+				position: absolute;
+				left: 12px;
+				top: 50%;
+				transform: translateY(-50%);
+				color: var(--fg);
+				font-size: 12px;
+				pointer-events: none;
+				opacity: 0;
+			}
+			.pane[data-focus="0"] .chrome .ctl,
+			.pane[data-focus="0"] .chrome .addr { visibility: hidden; }
+			.pane[data-focus="0"] .chrome .name { opacity: 1; }
+
+			.pane .frame {
+				position: relative;
+				flex: 1 1 auto;
+				min-height: 0;
+			}
+			.pane .frame iframe {
+				position: absolute;
+				inset: 0;
+				width: 100%;
+				height: 100%;
+				border: 0;
+				background: #fff;
+				display: block;
+			}
+
+			/* ── 拖拽改尺寸：只保留右下角一个把手 ───────────────────────
+			   面板以舞台中心为锚点缩放，所以单个角就够用。
+			   样式跟着视图的圆角走（12px 面板 → 这里用同曲率的弧线）。 */
+			.pane .handle {
+				position: absolute;
+				/* 露在视图**外侧** */
+				right: -15px;
+				bottom: -15px;
+				width: 26px;
+				height: 26px;
+				z-index: 6;
+				display: none;
+				cursor: nwse-resize;
+			}
+			.pane[data-focus="1"] .handle { display: block; }
+			.pane .handle::after {
+				content: "";
+				position: absolute;
+				right: 4px;
+				bottom: 4px;
+				width: 17px;
+				height: 17px;
+				/* 与视图 12px 圆角同心的弧线 */
+				border-right: 2px solid var(--accent);
+				border-bottom: 2px solid var(--accent);
+				border-bottom-right-radius: 12px;
+				opacity: 0.9;
+				filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.7));
+			}
+
+			/* ── 视图内弹层：拦截 target=_blank / window.open ────────────
+			   主视图向四周扩张（scale）并被半透明遮罩压暗，弹层浮在其上，
+			   以此形成层次。弹层尺寸与主视图一致。 */
+			#veil {
+				position: absolute;
+				inset: 0;
+				z-index: 30;
+				background: rgba(6, 10, 16, 0.55);
+				opacity: 0;
+				pointer-events: none;
+				transition: opacity 260ms var(--ease);
+			}
+			#stage[data-overlay="1"] #veil { opacity: 1; pointer-events: auto; }
+
+			.pane[data-under="1"] {
+				/* 不加 !important：U3 的 FLIP 要靠内联 transform 才盖得住 */
+				transform: scale(1.045);
+				opacity: 0.72;
+				transition: transform 280ms var(--ease), opacity 280ms var(--ease);
+			}
+			/* 被压层级的主视图不要再露控制栏，否则会和弹层的控制栏叠成两条 */
+			.pane[data-under="1"] .chrome { opacity: 0; }
+			.pane[data-under="1"] .handle { display: none; }
+
+			#overlay {
+				position: absolute;
+				left: calc(50% - var(--panel-w) / 2);
+				top: calc(50% - var(--panel-h) / 2);
+				width: var(--panel-w);
+				height: var(--panel-h);
+				z-index: 31;
+				display: flex;
+				flex-direction: column;
+				border: 2px solid var(--accent);
+				border-radius: 12px;
+				overflow: hidden;
+				background: #0d1219;
+				box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.9);
+				opacity: 0;
+				pointer-events: none;
+				transform: scale(0.965);
+				transition: opacity 240ms var(--ease), transform 240ms var(--ease);
+			}
+			#stage[data-overlay="1"] #overlay {
+				opacity: 1;
+				pointer-events: auto;
+				transform: none;
+			}
+			#overlay .frame {
+				position: relative;
+				flex: 1 1 auto;
+				min-height: 0;
+			}
+			#overlay .frame iframe {
+				position: absolute;
+				inset: 0;
+				width: 100%;
+				height: 100%;
+				border: 0;
+				background: #fff;
+			}
+			#overlay .chrome .ctl.close { color: #f85149; }
+
+			/* 压暗：纯色/渐变遮罩，绝不用 backdrop-filter（会每帧回读 iframe 纹理） */
+			.pane .scrim {
+				position: absolute;
+				inset: 0;
+				background: linear-gradient(180deg, rgba(6, 10, 16, 0.32), rgba(6, 10, 16, 0.66));
+				transition: opacity var(--dur) var(--ease);
+			}
+
+			/* 非焦点面板整体不吃指针，但遮罩要单独接管点击用于聚焦 */
+			.pane[data-focus="0"] { pointer-events: none; }
+			.pane[data-focus="0"] .scrim { pointer-events: auto; cursor: pointer; }
+
+			/* 焦点面板：恒等变换 —— 不创建常驻合成层，文字像素级清晰 */
+			.pane[data-focus="1"] { transform: none; opacity: 1; }
+			.pane[data-focus="1"] .scrim { opacity: 0; pointer-events: none; }
+
+			/* ─────────────────────────── 网格总览 ─────────────────────── */
+			#stage[data-mode="grid"] {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				grid-template-rows: 1fr 1fr;
+				gap: 10px;
+				padding: 10px;
+				perspective: none;
+			}
+			#stage[data-mode="grid"] .pane {
+				/* 用 relative 而不是 static：内层 .clip 是 inset:0 的绝对定位，
+				   需要一个已定位的父级，否则会相对 #stage 铺满 */
+				position: relative;
+				left: auto;
+				top: auto;
+				width: auto;
+				height: auto;
+				/* 不加 !important：U3 的 FLIP 展开动画就是靠内联 transform 从
+				   折叠态插值到 none，!important 会把动画整个压掉 */
+				transform: none;
+				opacity: 1;
+			}
+			#stage[data-mode="grid"] .pane .clip { box-shadow: none; }
+			#stage[data-mode="grid"] .pane .handle { display: none; }
+			#stage[data-mode="grid"] .scrim { opacity: 0 !important; }
+
+			/* ─────────────────────────── 启动遮罩 ─────────────────────── */
+			#boot {
+				position: absolute;
+				inset: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				flex-direction: column;
+				gap: 10px;
+				background: var(--bg);
+				z-index: 50;
+			}
+			#boot[hidden] { display: none; }
+			#boot code { color: #f85149; max-width: 80vw; white-space: pre-wrap; }
+
+			@media (prefers-reduced-motion: reduce) {
+				.pane { transition-duration: 120ms; }
+			}
+
+			/* ─────────────────────── 设置弹窗 ─────────────────────── */
+			#settings-modal {
+				position: fixed;
+				inset: 0;
+				z-index: 60;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				background: rgba(4, 7, 11, 0.66);
+			}
+			#settings-modal[hidden] { display: none; }
+			#settings-modal .card {
+				width: min(860px, 92vw);
+				max-height: 86vh;
+				display: flex;
+				flex-direction: column;
+				background: var(--bg2);
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.9);
+				overflow: hidden;
+			}
+			#settings-modal header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 12px 14px;
+				border-bottom: 1px solid var(--line);
+			}
+			#settings-modal .hint {
+				margin: 10px 14px 0;
+				color: var(--dim);
+				font-size: 12px;
+			}
+			#settings-modal .hint code {
+				background: #0b0e13;
+				border: 1px solid var(--line);
+				border-radius: 4px;
+				padding: 0 4px;
+			}
+			#sites {
+				padding: 12px 14px;
+				overflow-y: auto;
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+			}
+			.site-row {
+				display: grid;
+				grid-template-columns: 26px 130px 1fr 96px 30px;
+				gap: 8px;
+				align-items: center;
+			}
+			.site-row .dot {
+				width: 12px;
+				height: 12px;
+				border-radius: 50%;
+				background: #58a6ff;
+				justify-self: center;
+			}
+			.site-row input[type="text"] {
+				height: 30px;
+				padding: 0 9px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: #0b0e13;
+				color: var(--fg);
+				font: 12px/1 inherit;
+				min-width: 0;
+			}
+			.site-row label {
+				display: flex;
+				align-items: center;
+				gap: 6px;
+				color: var(--dim);
+				font-size: 12px;
+				white-space: nowrap;
+			}
+			#settings-modal footer {
+				display: flex;
+				gap: 8px;
+				justify-content: flex-end;
+				padding: 12px 14px;
+				border-top: 1px solid var(--line);
+			}
+			#settings-modal .ctl.wide {
+				width: auto;
+				padding: 0 14px;
+				height: 30px;
+				border: 1px solid var(--line);
+			}
+			#settings-modal .ctl.primary {
+				border-color: var(--accent);
+				color: var(--fg);
+				background: #1b2432;
+			}
+		</style>
+	</head>
+	<body>
+		<header id="bar">
+			<div id="tabs"></div>
+			<div id="actions">
+				<select id="preset" title="折屏参数预设">
+					<option value="nav">折屏 · 导航优先</option>
+					<option value="read">折屏 · 查阅优先</option>
+					<option value="full">折屏 · 全幅焦点</option>
+				</select>
+				<button id="mode-focus" data-active="1">折屏</button>
+				<button id="mode-grid">宫格</button>
+				<button id="settings" title="设置站点列表（Ctrl+,）">⚙</button>
+				<span id="stat">启动中…</span>
+			</div>
+		</header>
+
+		<main id="stage" data-mode="focus">
+			<!-- U6 屏幕空间标签：不参与 3D 变换，所以文字始终清晰 -->
+			<div id="labels"></div>
+			<!-- 视图内弹层：拦截 target=_blank / window.open 后在这里打开 -->
+			<div id="veil"></div>
+			<div id="overlay">
+				<div class="chrome">
+					<button class="ctl" data-act="back" title="后退">‹</button>
+					<button class="ctl" data-act="forward" title="前进">›</button>
+					<button class="ctl" data-act="reload" title="刷新">⟳</button>
+					<input class="addr" spellcheck="false" placeholder="输入网址后回车" />
+					<button class="ctl close" data-act="close" title="关闭（Esc）">✕</button>
+				</div>
+				<div class="frame"></div>
+			</div>
+		</main>
+
+		<div id="boot">
+			<div>正在启动 Scramjet 代理内核…</div>
+			<code id="boot-error"></code>
+		</div>
+
+		<!-- 设置：站点列表 -->
+		<div id="settings-modal" hidden>
+			<div class="card">
+				<header>
+					<strong>站点列表</strong>
+					<button class="ctl" id="settings-close" title="关闭">✕</button>
+				</header>
+				<p class="hint">
+					改完点「保存并应用」会重载页面。地址支持 <code>{host}</code> 占位符
+					（会替换成你打开本页的主机名，用于保证与 hub 同站）。
+				</p>
+				<div id="sites"></div>
+				<footer>
+					<button class="ctl wide" id="site-add">＋ 添加站点</button>
+					<button class="ctl wide" id="site-reset">恢复默认</button>
+					<button class="ctl wide primary" id="site-save">保存并应用</button>
+				</footer>
+			</div>
+		</div>
+	</body>
+</html>

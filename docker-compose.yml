@@ -1,0 +1,43 @@
+name: zoetrope
+
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+      args:
+        HTTP_PROXY: ${http_proxy:-}
+        HTTPS_PROXY: ${https_proxy:-}
+        NO_PROXY: ${no_proxy:-}
+    image: zoetrope/hub:dev
+    container_name: zoetrope-hub
+    # 复用宿主已验证的 IPv4 出网路径
+    network_mode: host
+    environment:
+      PORT: "18095"
+      # Wisp 走裸 TCP，不经 HTTP_PROXY；这里必须是本机可达的解析器
+      WISP_DNS: "223.5.5.5,119.29.29.29"
+      # 跨源隔离策略：credentialless（默认）/ require-corp / off
+      COEP: ${COEP:-off}
+      # 设为 1 可打开 Wisp 详细日志（排查出网故障用）
+      WISP_DEBUG: ${WISP_DEBUG:-}
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+    restart: unless-stopped
+
+  tls:
+    image: caddy:2-alpine
+    container_name: zoetrope-tls
+    network_mode: host
+    depends_on:
+      - hub
+    volumes:
+      - ./tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls/certs:/certs:ro
+      - ./tls/site:/site:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

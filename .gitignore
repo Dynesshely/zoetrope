@@ -1,0 +1,22 @@
+# ── 机密：TLS 私钥绝不入库 ─────────────────────────────────────────
+# tls/certs/ 全部是 gen-certs.sh 的产物（含 ca.key / server.key），
+# 每次 `make up` 会自动重建，所以整目录不入库。
+tls/certs/
+
+# ── 验证产物：verify/ 下累计约 239MB 截图与日志 ────────────────────
+# 只保留 verify/*.mjs 这些**脚本**，它们才是可复现的资产。
+verify/*/
+verify/*.png
+verify/*.json
+verify/*.log
+out/
+out-*/
+
+# ── 构建 / 依赖产物 ───────────────────────────────────────────────
+node_modules/
+.build-logs/
+*.tsbuildinfo
+.DS_Store
+
+# ── vendor/Scramjet-App 是**子模块**（见 .gitmodules），
+#    构建需要它的 package.json + pnpm-lock.yaml（proxy/Dockerfile 会 COPY 这两个）──

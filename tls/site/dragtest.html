@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<title>drag test</title>
+		<style>
+			body { font: 13px/1.6 ui-monospace, monospace; background: #0e1116; color: #e6edf3; padding: 16px; }
+			#pad { position: relative; width: 420px; height: 64px; background: #1b2432;
+				border: 1px solid #2a3441; border-radius: 8px; margin-bottom: 12px; touch-action: none; }
+			#knob { position: absolute; left: 0; top: 2px; width: 60px; height: 58px;
+				background: #58a6ff; border-radius: 6px; cursor: grab; }
+			#track { width: 420px; height: 8px; background: #1b2432; border-radius: 4px; margin: 4px 0 14px; }
+			#fill { height: 8px; width: 0; background: #3fb950; border-radius: 4px; }
+			pre { white-space: pre-wrap; color: #9fb0c0; }
+			.k { color: #d29922; }
+		</style>
+	</head>
+	<body>
+		<h3>拖拽探针</h3>
+		<div id="pad"><div id="knob"></div></div>
+		<div id="track"><div id="fill"></div></div>
+		<!-- 原生 range 作为对照：它由浏览器内部实现，不依赖页面 JS 的坐标计算 -->
+		<input id="range" type="range" min="0" max="100" value="0" style="width: 420px" />
+		<pre id="log">（等待拖拽）</pre>
+
+		<script>
+			const T = {};
+			const trusted = {};
+			let knobLeft = 0;
+			let rangeVal = 0;
+			const logEl = document.getElementById("log");
+			const pad = document.getElementById("pad");
+			const knob = document.getElementById("knob");
+			const fill = document.getElementById("fill");
+			const range = document.getElementById("range");
+
+			function bump(type, e) {
+				T[type] = (T[type] || 0) + 1;
+				const k = e.isTrusted ? "true" : "FALSE";
+				trusted[type] = trusted[type] || new Set();
+				trusted[type].add(k);
+			}
+			function render() {
+				const names = Object.keys(T).sort();
+				const lines = names.map(
+					(n) => `${n.padEnd(14)} count=${String(T[n]).padStart(4)}  isTrusted=${[...trusted[n]].join(",")}`
+				);
+				logEl.innerHTML =
+					lines.join("\n") +
+					`\n\nknobLeft=${knobLeft}\nrangeValue=${rangeVal}`;
+			}
+
+			let dragging = false;
+			knob.addEventListener("pointerdown", (e) => {
+				bump("pointerdown", e);
+				dragging = true;
+				try { knob.setPointerCapture(e.pointerId); } catch {}
+			});
+			knob.addEventListener("mousedown", (e) => bump("mousedown", e));
+			window.addEventListener("pointermove", (e) => {
+				bump("pointermove", e);
+				if (dragging) {
+					const r = pad.getBoundingClientRect();
+					knobLeft = Math.round(Math.max(0, Math.min(r.width - 60, e.clientX - r.left - 30)));
+					knob.style.left = knobLeft + "px";
+					fill.style.width = Math.round((knobLeft / (r.width - 60)) * 100) + "%";
+				}
+			});
+			window.addEventListener("mousemove", (e) => bump("mousemove", e));
+			window.addEventListener("pointerup", (e) => { bump("pointerup", e); dragging = false; });
+			window.addEventListener("mouseup", (e) => bump("mouseup", e));
+			window.addEventListener("pointercancel", (e) => bump("pointercancel", e));
+			range.addEventListener("input", (e) => { rangeVal = Number(range.value); });
+
+			setInterval(render, 120);
+			// 供自动化读取
+			window.__DRAG = () => ({
+				counts: { ...T },
+				trusted: Object.fromEntries(Object.entries(trusted).map(([k, v]) => [k, [...v]])),
+				knobLeft,
+				rangeValue: rangeVal,
+			});
+		</script>
+	</body>
+</html>
